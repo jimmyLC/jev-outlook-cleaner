@@ -1,0 +1,8 @@
+# Agent instructions
+
+1. Read `PROJECT_STATUS.md`, `README.md`, and `SECURITY.md` before changing this project. Inspect `git status` and the current diff; identify whether the task concerns public source or the owner's separate private runtime data.
+2. Keep this repository publishable. Commit only source, synthetic tests, documentation, and empty example configuration. Keep live credentials, token caches, personal rules, processed fingerprints, mailbox reviews, logs, and exports outside Git. Check staged filenames and content, including history, before every push.
+3. Preserve the safety boundary in `jev_outlook_cleaner.py`: keep-list and processed-hash exclusions before Jev; conservative bulk and deletion thresholds; protected/ambiguous mail stays in Inbox under auto-apply; a confirmed manual selection affects only its batch; fresh account and message snapshot checks before every move; `deleteditems` as the only move destination. One batch choice does not become a future rule.
+4. Preserve the Web boundary in `web_app.py`: bind to loopback, validate Host/Origin/CSRF on writes, constrain review paths, keep review JSON and logs private, and require terminal `login` for interactive Microsoft sign-in. A source or UI task does not authorize a live scan or email move.
+5. Verify behavior with `python -m py_compile jev_outlook_cleaner.py web_app.py` and `python -m unittest -q test_cleaner test_web_app`. Use synthetic data and mocks. Report separately what the tests prove and what still needs live validation.
+6. Before a future `main` push, present the reviewed diff and obtain the owner's explicit approval. Never use `git add -f` to publish ignored runtime files.

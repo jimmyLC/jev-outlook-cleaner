@@ -1,5 +1,7 @@
 # Jev Outlook Cleaner
 
+For an agent handoff, read [AGENTS.md](AGENTS.md) and [PROJECT_STATUS.md](PROJECT_STATUS.md) before changing behavior.
+
 A local Web app for cautiously triaging older Outlook Inbox messages with TypeSafe Jev. The source can be public; credentials, mailbox content, review files, and personal rules stay on your computer. **Do not deploy this Web server to the public Internet.** It binds to `127.0.0.1` only.
 
 ## What it does
