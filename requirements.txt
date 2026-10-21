@@ -1,0 +1,4 @@
+msal>=1.30,<2
+requests>=2.32,<3
+typesafe-sdk>=0.1
+python-dotenv>=1,<2

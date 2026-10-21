@@ -1,0 +1,27 @@
+# Credentials and mailbox data must never be versioned.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*token*
+*credential*
+*secret*
+keep-list.json
+delete-rules.json
+.processed-message-hashes.json
+reviews/
+data/
+logs/
+backups/
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
