@@ -247,5 +247,79 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(keep_data["exact_subjects"], [msg["subject"]])
 
 
+class SignalAndLogicTests(unittest.TestCase):
+    def jev(self, triage="delete_candidate", tri_conf=0.99, kind="bulk_or_automated", kind_conf=0.99):
+        client = Mock()
+        client.system_one.return_value = SimpleNamespace(choices={
+            "triage": SimpleNamespace(choice=triage, confidence=tri_conf, probabilities={}),
+            "message_type": SimpleNamespace(choice=kind, confidence=kind_conf),
+        })
+        return client
+
+    def test_security_and_receipt_mail_never_reach_jev(self):
+        for subject in ("Your verification code", "訂單確認 #123", "Re: 週末聚餐", "您的電子發票"):
+            client = Mock()
+            result = cleaner.classify(client, message() | {"subject": subject})
+            self.assertEqual(result["decision"], "keep", subject)
+            client.system_one.assert_not_called()
+
+    def test_jev_bulk_without_local_evidence_is_downgraded_to_review(self):
+        result = cleaner.classify(self.jev(), message())
+        self.assertEqual(result["decision"], "review")
+        self.assertIn("缺少", result["note"])
+
+    def test_jev_bulk_with_unsubscribe_evidence_stays_delete_candidate(self):
+        msg = message()
+        msg["body"]["content"] = "Big sale! Click here to unsubscribe"
+        result = cleaner.classify(self.jev(), msg)
+        self.assertEqual(result["decision"], "delete_candidate")
+        self.assertIn("內文含取消訂閱", result["signals"]["bulk"])
+
+    def test_list_headers_count_as_bulk_evidence(self):
+        msg = message() | {"internetMessageHeaders": [{"name": "List-Unsubscribe", "value": "<mailto:x@y>"}]}
+        self.assertEqual(cleaner.classify(self.jev(), msg)["decision"], "delete_candidate")
+
+    def test_list_headers_do_not_change_the_move_time_snapshot(self):
+        msg = message()
+        with_headers = msg | {"internetMessageHeaders": [{"name": "X", "value": "1"}]}
+        self.assertEqual(cleaner.snapshot(msg), cleaner.snapshot(with_headers))
+
+    def test_auto_apply_refuses_item_with_empty_bulk_signals(self):
+        item = review(message())["items"][0]
+        item.update(message_type="bulk_or_automated", message_type_confidence=0.99,
+                    signals={"bulk": [], "protect": []})
+        self.assertFalse(cleaner.auto_deletion_candidate(item))
+        item["signals"]["bulk"] = ["內文含取消訂閱"]
+        self.assertTrue(cleaner.auto_deletion_candidate(item))
+
+    def rules_in(self, rules):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        (Path(folder.name) / "delete-rules.json").write_text(json.dumps(rules), encoding="utf-8")
+        patcher = patch.object(cleaner, "PROJECT", Path(folder.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_generic_no_reply_rule_does_not_shadow_exact_sender_rule(self):
+        self.rules_in({"sender_rules": [
+            {"type": "no_reply_local_part"},
+            {"email": "noreply@shop.example", "min_age_days": 30, "reason": "exact"},
+        ]})
+        self.assertEqual(cleaner.learned_delete_rule(
+            "Promo", "noreply@shop.example", "2020-01-01T00:00:00Z"), "exact")
+
+    def test_invalid_saved_regex_is_skipped_not_fatal(self):
+        self.rules_in({"subject_patterns": [{"regex": "("}, {"regex": "Weekly .*", "reason": "ok"}]})
+        self.assertEqual(cleaner.learned_delete_rule("Weekly digest"), "ok")
+
+    def test_preview_shows_reason_and_formatted_date(self):
+        data = review(message())
+        data["items"][0].update(signals={"bulk": ["內文含取消訂閱"]}, confidence=0.93)
+        output = cleaner.render_review(data)
+        self.assertIn("群發佐證：內文含取消訂閱", output)
+        self.assertIn("Jev 信心 93%", output)
+        self.assertIn("2026-01-01 00:00", output)
+
+
 if __name__ == "__main__":
     unittest.main()

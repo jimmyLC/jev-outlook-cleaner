@@ -9,6 +9,7 @@ A local Web app for cautiously triaging older Outlook Inbox messages with TypeSa
 - Scans Inbox messages older than a chosen number of days. The Web interface caps each batch at 200 new messages.
 - Skips messages matching your private `keep-list.json` and previously processed SHA-256 fingerprints of Internet Message IDs. It pages further to fill the batch.
 - Classifies eligible messages as keep, review, or delete candidate. Attachments, high importance, and follow-up flags are protected.
+- Adds local evidence before trusting Jev (`mail_signals.py`): replies and security, receipt, order, booking and invitation mail are kept without calling Jev, and a message needs bulk evidence (`List-Unsubscribe`/`List-Id`/`Precedence` headers, an unsubscribe link, or a newsletter-style sender) to stay a delete candidate. Each preview card shows why it landed in its group.
 - Automatically moves only explicit saved-rule matches or messages that Jev classifies as bulk/automated with confidence at least 0.90 **and** as delete candidates with confidence at least 0.85.
 - Offers a manual review page where checked messages are kept and remembered; unchecked messages can be moved for that batch after you upload its downloaded selection file.
 - Rechecks the Outlook account and each message's Inbox location, ID, subject, sender, received time, Internet Message ID, and content snapshot immediately before moving. Moves use **Deleted Items**, never permanent deletion.

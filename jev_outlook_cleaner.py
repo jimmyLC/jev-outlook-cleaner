@@ -20,12 +20,17 @@ import requests
 from dotenv import load_dotenv
 from typesafe_sdk import Choice, TypeSafeClient
 
+import mail_signals
+from ui_theme import BASE_CSS, REVIEW_CSS
+
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = ["Mail.ReadWrite", "User.Read"]
 PROJECT = Path(__file__).resolve().parent
 load_dotenv(PROJECT / ".env", override=False)
 FIELDS = "id,subject,sender,receivedDateTime,body,importance,isRead,flag,hasAttachments,internetMessageId"
+# Headers are extra classification evidence only; they stay out of the move-time snapshot.
+LIST_FIELDS = FIELDS + ",internetMessageHeaders"
 ROOT = Path.home() / ".jev-outlook-cleaner"
 CACHE_PATH = ROOT / ".token-cache.bin"
 REVIEWS = PROJECT / "reviews"
@@ -96,7 +101,7 @@ class Outlook:
     def list_inbox(self, older_than_days: int, limit: int) -> list[dict[str, Any]]:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat(timespec="seconds")
         params = {
-            "$select": FIELDS,
+            "$select": LIST_FIELDS,
             "$filter": f"receivedDateTime le {cutoff}",
             "$orderby": "receivedDateTime asc",
             "$top": str(min(limit, 100)),
@@ -166,9 +171,16 @@ def classify(client: TypeSafeClient, message: dict[str, Any]) -> dict[str, Any]:
     if protection:
         return {"category": "keep", "confidence": None, "probabilities": {},
                 "decision": "keep", "rule": protection}
+    signals = mail_signals.collect(message)
+    if signals["protect"]:
+        # Replies, security, transaction and invitation mail never reach Jev.
+        return {"category": "keep", "confidence": None, "probabilities": {},
+                "decision": "keep", "signals": signals,
+                "rule": "疑似重要郵件（" + "、".join(signals["protect"]) + "），先保留"}
     name, address = sender_parts(message)
     body = clean_body(((message.get("body") or {}).get("content")) or "")
     state = {
+        "local_signals": {"bulk_evidence": signals["bulk"]},
         "subject": message.get("subject") or "(no subject)",
         "sender_name": name,
         "sender_address": address,
@@ -234,7 +246,14 @@ def classify(client: TypeSafeClient, message: dict[str, Any]) -> dict[str, Any]:
         proposed = "keep" if type_choice == "private_or_unclear" and type_confidence >= BULK_CLASSIFICATION_CONFIDENCE else "review"
     elif proposed == "delete_candidate" and confidence < DELETE_CONFIDENCE:
         proposed = "review"
+    note = None
+    if proposed == "delete_candidate" and not signals["bulk"]:
+        # Jev alone is not enough: require header/body evidence of mass mail.
+        proposed = "review"
+        note = "Jev 判為群發，但缺少取消訂閱／List 標頭等佐證，改列待確認"
     return {
+        "signals": signals,
+        "note": note,
         "category": str(triage.choice),
         "confidence": confidence,
         "probabilities": probabilities,
@@ -327,7 +346,11 @@ def learned_delete_rule(
     if explicitly_deleted_subject(value):
         return "使用者明確核准過此主旨，可列為刪除候選"
     for pattern in data.get("subject_patterns", []):
-        if re.fullmatch(pattern["regex"], value or "", flags=re.IGNORECASE):
+        try:
+            matched = re.fullmatch(pattern["regex"], value or "", flags=re.IGNORECASE)
+        except (re.error, KeyError, TypeError):
+            continue  # one bad saved rule must not abort the whole scan
+        if matched:
             return pattern.get("reason", "符合已核准的自動通知刪除規則")
     if not received_at:
         return None
@@ -337,14 +360,10 @@ def learned_delete_rule(
     except (TypeError, ValueError):
         return None
     sender = (sender_address or "").strip().casefold()
+    # Only exact-address rules count. Generic no-reply is a Jev signal, not a
+    # standalone deletion rule, and must never shadow a later exact-address rule.
     sender_rule = next((rule for rule in data.get("sender_rules", [])
-                        if (rule.get("type") == "no_reply_local_part"
-                            and sender.partition("@")[0] in {"noreply", "no-reply", "donotreply", "do-not-reply"})
-                        or (rule.get("email") and sender == rule["email"].casefold())), None)
-    # Generic no-reply is a Jev signal, not a standalone deletion rule. Jev
-    # must distinguish disposable bulk mail from security and personal notices.
-    if sender_rule and sender_rule.get("type") == "no_reply_local_part":
-        return None
+                        if rule.get("email") and sender == rule["email"].casefold()), None)
     if sender_rule and age_days >= int(sender_rule.get("min_age_days", 30)):
         return sender_rule.get("reason", "符合已核准的自動寄件者規則")
     return None
@@ -382,74 +401,102 @@ def review_selection_key(data: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+DECISION_GROUPS = (
+    ("delete_candidate", "直接刪除候選", "Jev 與本機訊號都判斷為群發／自動郵件"),
+    ("review", "待確認", "不確定是否重要，建議逐封看過"),
+    ("keep", "保留清單", "疑似重要或受保護；未勾選仍會列入本批刪除"),
+)
+
+
+def format_received(value: Any) -> str:
+    text = str(value or "")
+    return text[:16].replace("T", " ") if len(text) >= 16 else text
+
+
+def item_reason(item: dict[str, Any]) -> str:
+    """One short, human-readable line saying why the message landed in its group."""
+    if item.get("rule"):
+        return str(item["rule"])
+    parts = []
+    if item.get("note"):
+        parts.append(str(item["note"]))
+    signals = item.get("signals") or {}
+    if signals.get("bulk"):
+        parts.append("群發佐證：" + "、".join(signals["bulk"]))
+    confidence = item.get("confidence")
+    if isinstance(confidence, (int, float)):
+        parts.append(f"Jev 信心 {confidence:.0%}")
+    return " · ".join(parts)
+
+
 def render_review(data: dict[str, Any]) -> str:
-    groups = [
-        ("keep", "保留清單"),
-        ("review", "待確認"),
-        ("delete_candidate", "直接刪除候選"),
-    ]
-    sections = []
     escape = lambda value: html.escape(str(value or ""))
-    for decision, title in groups:
+    counts = {decision: 0 for decision, _, _ in DECISION_GROUPS}
+    for item in data["items"]:
+        if item.get("decision") in counts:
+            counts[item["decision"]] += 1
+    sections = []
+    for decision, title, hint in DECISION_GROUPS:
         cards = []
         for index, item in enumerate(data["items"]):
             if item.get("decision") != decision:
                 continue
+            subject = item.get("subject") or "(no subject)"
             searchable = " ".join(str(item.get(key) or "") for key in (
                 "subject", "sender_name", "sender_address", "received_at"
             ))
             moved = item.get("moved_to_deleted_items") is True
-            choice = ('<p class="moved">已移至 Outlook「刪除的郵件」</p>' if moved else
-                      f'<label class="keep-choice"><input type="checkbox" class="keep-toggle" '
-                      f'{"checked disabled" if retained_subject(item.get("subject", "")) else ""}'
-                      f'value="{index}" aria-label="保留：{escape(item.get("subject") or "(no subject)")}">'
-                      f'{"保留規則：已勾選" if retained_subject(item.get("subject", "")) else "勾選保留"}</label>')
-            cards.append(f'<article data-decision="{decision}" data-index="{index}" data-search="{escape(searchable)}">'
-                         + choice
-                         + f'<h3>{escape(item.get("subject") or "(no subject)")}</h3>'
-                         f'<p>{escape(item.get("sender_name"))} '
-                         f'&lt;{escape(item.get("sender_address"))}&gt; · '
-                         f'{escape(item.get("received_at"))}</p></article>')
-        sections.append(f'<section data-section="{decision}"><h2>{title}（'
-                        f'<span class="section-count" data-count-for="{decision}">{len(cards)}</span> 封）</h2>'
-                        + ("".join(cards) if cards else '<p class="empty">沒有郵件</p>')
-                        + '</section>')
+            locked = retained_subject(item.get("subject", ""))
+            if moved:
+                pick = ""
+                fate = '<span class="fate moved">已移動</span>'
+                note = '<p class="why moved">已移至 Outlook「刪除的郵件」</p>'
+            else:
+                pick = (f'<label class="pick"><input type="checkbox" class="keep-toggle" '
+                        f'{"checked disabled" if locked else ""}'
+                        f'value="{index}" aria-label="保留：{escape(subject)}"></label>')
+                fate = ('<span class="fate locked" data-fate>保留規則</span>' if locked
+                        else '<span class="fate trash" data-fate>將移至刪除的郵件</span>')
+                note = ""
+            reason = item_reason(item)
+            blank_pick = '<span class="pick"></span>'
+            cards.append(
+                f'<article data-decision="{decision}" data-index="{index}" data-search="{escape(searchable)}">'
+                f'{pick or blank_pick}'
+                f'<div class="line1"><h3>{escape(subject)}</h3>{fate}</div>'
+                f'<p class="who">{escape(item.get("sender_name"))} &lt;{escape(item.get("sender_address"))}&gt; · '
+                f'{escape(format_received(item.get("received_at")))}</p>'
+                + (f'<p class="why">{escape(reason)}</p>' if reason else "") + note + '</article>'
+            )
+        sections.append(
+            f'<section class="group" data-section="{decision}"><h2>{title}'
+            f'<span class="chip {decision}"><span class="section-count" data-count-for="{decision}">'
+            f'{len(cards)}</span> 封</span></h2><p class="small">{hint}</p>'
+            + ("".join(cards) if cards else '<p class="empty">沒有郵件</p>') + '</section>')
+    stats = "".join(
+        f'<button type="button" class="stat {decision}" data-filter="{decision}" aria-pressed="false">'
+        f'<b>{counts[decision]}</b><span>{title}</span></button>'
+        for decision, title, _ in DECISION_GROUPS)
     return (f'<!doctype html><html lang="zh-Hant" data-review-key="{review_selection_key(data)}"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>Outlook 清理預覽</title><style>body{font:16px system-ui;max-width:960px;'
-            'margin:40px auto;padding:0 20px;background:#f5f6f8;color:#20252d}'
-            '.filters{position:sticky;top:0;z-index:2;display:flex;gap:12px;align-items:center;'
-            'flex-wrap:wrap;background:#f5f6f8;padding:12px 0;border-bottom:1px solid #d0d5dd}'
-            '.filters label{display:flex;gap:8px;align-items:center}.filters input,.filters select{'
-            'font:inherit;padding:9px 12px;border:1px solid #98a2b3;border-radius:8px;background:white}'
-            '.filters input{min-width:min(360px,70vw)}#result-count{margin-left:auto;color:#475467}'
-            'article{background:white;border:1px solid #ddd;border-radius:12px;padding:20px;margin:16px 0}'
-            '.keep-choice{display:flex;gap:10px;align-items:center;color:#175cd3;font-weight:650;cursor:pointer}'
-            '.keep-choice input{width:20px;height:20px;accent-color:#1570ef} .moved{color:#067647;font-weight:650} .selection{'
-            'position:sticky;top:66px;z-index:1;background:#ecfdf3;border:1px solid #abefc6;'
-            'border-radius:12px;padding:16px;margin:16px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}'
-            '.selection button{font:inherit;padding:10px 14px;border:0;border-radius:8px;cursor:pointer}'
-            '.selection .primary{background:#b42318;color:white;font-weight:700}.selection .secondary{background:white;color:#344054;border:1px solid #98a2b3}'
-            '#selection-count{font-weight:650}.notice{color:#475467;flex-basis:100%;margin:0}'
-            'h2{font-size:22px;margin-top:36px}h3{font-size:18px}p{white-space:pre-wrap;overflow-wrap:anywhere}'
-            '.empty{color:#667085}[hidden]{display:none!important}</style>'
-            '<h1>Outlook 清理預覽</h1>'
-            '<div class="selection"><strong id="selection-count" aria-live="polite"></strong>'
-            '<button type="button" id="keep-all" class="secondary">全部勾選保留</button>'
-            '<button type="button" id="clear-all" class="secondary">全部取消勾選</button>'
-            '<button type="button" id="confirm-selection" class="primary">確認保留勾選項，刪除其餘郵件</button>'
-            '<p class="notice">勾選代表保留並記住；未勾選（包含「保留清單」分類）都會列入本批刪除。'
-            '已移動的郵件不會再次列入。按確認後會下載選擇檔，回到本機 Web 頁面上傳套用；郵件只會移到 Outlook「刪除的郵件」。</p>'
+            '<title>Outlook 清理預覽</title><style>' + BASE_CSS + REVIEW_CSS + '</style>'
+            '<body><div class="wrap"><div class="hero"><div><h1>Outlook 清理預覽</h1>'
+            f'<p class="sub">本批 {len(data["items"])} 封 · 勾選＝保留並記住，未勾選＝本批移至「刪除的郵件」</p></div></div>'
+            f'<div class="stats">{stats}</div>'
+            '<div class="summary"><div class="grow"><strong id="selection-count" aria-live="polite"></strong></div>'
+            '<button type="button" id="keep-all" class="ghost">全部保留</button>'
+            '<button type="button" id="clear-all" class="ghost">全部取消</button>'
+            '<button type="button" id="confirm-selection" class="danger">確認並下載選擇檔</button>'
+            '<p class="notice">未勾選（包含「保留清單」分類）都會列入本批刪除，且只移到 Outlook「刪除的郵件」，可復原。'
+            '已移動的郵件不會再次列入。按確認後會下載選擇檔，請回到本機 Web 頁面上傳套用。</p>'
             '<p id="selection-status" class="notice" aria-live="polite" hidden></p></div>'
-            '<div class="filters"><label for="category-filter">分類</label>'
-            '<select id="category-filter"><option value="all">全部分類</option>'
-            '<option value="keep">保留</option><option value="review">待確認</option>'
-            '<option value="delete_candidate">直接刪除候選</option></select>'
-            '<label for="search-filter">搜尋</label>'
-            '<input id="search-filter" type="search" placeholder="輸入主旨、寄件者或時間" autocomplete="off">'
+            '<div class="toolbar"><select id="category-filter" aria-label="分類">'
+            '<option value="all">全部分類</option><option value="delete_candidate">直接刪除候選</option>'
+            '<option value="review">待確認</option><option value="keep">保留</option></select>'
+            '<input id="search-filter" type="search" placeholder="搜尋主旨、寄件者或日期" autocomplete="off" aria-label="搜尋">'
             '<span id="result-count" aria-live="polite"></span></div>'
             + "".join(sections)
-            + '<p id="no-results" class="empty" hidden>找不到符合條件的郵件。</p>'
+            + '<p id="no-results" class="empty" hidden>找不到符合條件的郵件。</p></div><div id="toast" hidden></div>'
             + '''<script>
 const categoryFilter = document.getElementById('category-filter');
 const searchFilter = document.getElementById('search-filter');
@@ -457,9 +504,20 @@ const resultCount = document.getElementById('result-count');
 const noResults = document.getElementById('no-results');
 const keepChoices = [...document.querySelectorAll('.keep-toggle')];
 const selectionCount = document.getElementById('selection-count');
+function toast(text) {
+  const box = document.getElementById('toast');
+  box.textContent = text; box.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { box.hidden = true; }, 3500);
+}
 function updateSelectionCount() {
   const keepCount = keepChoices.filter(choice => choice.checked).length;
-  selectionCount.textContent = `保留 ${keepCount} 封；未勾選將刪除 ${keepChoices.length - keepCount} 封`;
+  selectionCount.textContent = `保留 ${keepCount} 封 · 將刪除 ${keepChoices.length - keepCount} 封`;
+  for (const choice of keepChoices) {
+    const fate = choice.closest('article').querySelector('[data-fate]');
+    if (choice.disabled) continue;
+    fate.className = 'fate ' + (choice.checked ? 'keeps' : 'trash');
+    fate.textContent = choice.checked ? '保留' : '將移至刪除的郵件';
+  }
 }
 for (const choice of keepChoices) choice.addEventListener('change', updateSelectionCount);
 document.getElementById('keep-all').addEventListener('click', () => {
@@ -489,6 +547,7 @@ document.getElementById('confirm-selection').addEventListener('click', () => {
   const status = document.getElementById('selection-status');
   status.textContent = '選擇檔已下載，請回到本機 Web 頁面上傳套用。';
   status.hidden = false;
+  toast('選擇檔已下載');
 });
 function filterMessages() {
   const category = categoryFilter.value;
@@ -497,8 +556,7 @@ function filterMessages() {
   for (const section of document.querySelectorAll('section[data-section]')) {
     const sectionCategory = section.dataset.section;
     let sectionVisible = 0;
-    const cards = section.querySelectorAll('article[data-decision]');
-    for (const card of cards) {
+    for (const card of section.querySelectorAll('article[data-decision]')) {
       const visible = (category === 'all' || category === sectionCategory)
         && card.dataset.search.toLowerCase().includes(query);
       card.hidden = !visible;
@@ -510,7 +568,13 @@ function filterMessages() {
   }
   resultCount.textContent = `顯示 ${visibleTotal} 封`;
   noResults.hidden = visibleTotal !== 0;
+  for (const stat of document.querySelectorAll('.stat'))
+    stat.setAttribute('aria-pressed', String(stat.dataset.filter === category));
 }
+for (const stat of document.querySelectorAll('.stat')) stat.addEventListener('click', () => {
+  categoryFilter.value = categoryFilter.value === stat.dataset.filter ? 'all' : stat.dataset.filter;
+  filterMessages();
+});
 categoryFilter.addEventListener('change', filterMessages);
 searchFilter.addEventListener('input', filterMessages);
 filterMessages();
@@ -750,6 +814,9 @@ def auto_deletion_candidate(item: dict[str, Any]) -> bool:
         return False
     if item.get("rule"):
         return True
+    signals = item.get("signals")
+    if isinstance(signals, dict) and not signals.get("bulk"):
+        return False  # reviews from before local signals existed have no such key
     return (
         item.get("message_type") == "bulk_or_automated"
         and float(item.get("message_type_confidence") or 0) >= BULK_CLASSIFICATION_CONFIDENCE

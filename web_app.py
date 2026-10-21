@@ -22,6 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ui_theme import BASE_CSS, DASHBOARD_CSS
+
 PROJECT = Path(__file__).resolve().parent
 REVIEWS = PROJECT / "reviews"
 REVIEW_NAME = re.compile(r"review-\d{8}-\d{6}-\d+\.json\Z")
@@ -84,7 +86,7 @@ class Jobs:
                 if names:
                     name = Path(names[-1]).name
                     path = review_path(name)
-                    summary = {"review": name, **public_counts(path)}
+                    summary = {"review_file": name, **public_counts(path)}
             elif command == "auto-apply":
                 match = re.search(
                     r"Automatically selected (\d+); moved (\d+); skipped (\d+); failed (\d+)",
@@ -127,43 +129,64 @@ def dashboard() -> str:
         except (OSError, ValueError, KeyError):
             continue
         name = html.escape(path.name)
+        stamp = html.escape(f"{path.name[7:11]}-{path.name[11:13]}-{path.name[13:15]} "
+                            f"{path.name[16:18]}:{path.name[18:20]}")
         cards.append(
-            f'<article><h3>{name}</h3><p>共 {count["total"]} 封 · 保留 {count["keep"]} · '
-            f'待確認 {count["review"]} · 刪除候選 {count["delete_candidate"]}</p>'
-            f'<p><a href="/review/{name[:-5]}.html">查看預覽</a></p>'
-            f'<button data-auto="{name}">自動套用高信心候選</button> '
-            f'<label>上傳預覽下載的選擇檔 <input type="file" data-selection="{name}" '
-            f'accept="application/json,.json"></label></article>'
+            f'<article class="card review-row"><div class="meta"><span class="name">{stamp}</span>'
+            f'<div class="chips"><span class="chip total">共 {count["total"]} 封</span>'
+            f'<span class="chip keep">保留 {count["keep"]}</span>'
+            f'<span class="chip review">待確認 {count["review"]}</span>'
+            f'<span class="chip delete_candidate">刪除候選 {count["delete_candidate"]}</span></div></div>'
+            f'<div class="actions"><a class="btn" href="/review/{name[:-5]}.html">查看預覽</a>'
+            f'<label class="btn ghost file-btn">上傳選擇檔<input type="file" data-selection="{name}" '
+            f'accept="application/json,.json" aria-label="上傳選擇檔"></label>'
+            f'<button class="danger-ghost" data-auto="{name}" title="只移動已核准規則或高信心群發候選">自動套用</button>'
+            f'</div></article>'
         )
+    empty = '<div class="card empty-state">尚無預覽。先在上方開始掃描。</div>'
     return f'''<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Outlook Jev 清理</title>
-<style>body{{font:16px system-ui;max-width:940px;margin:40px auto;padding:0 20px;color:#17212e;background:#f5f7fa}}
-h1{{font-size:30px}}article,.panel{{background:white;padding:22px;border:1px solid #d9e0e8;border-radius:14px;margin:16px 0}}
-button,input{{font:inherit}}button{{background:#1769aa;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer}}
-button[data-auto]{{background:#9d2c23}}input[type=number]{{width:90px;padding:8px}}label{{margin-right:12px}}
-small{{color:#526071}}#status{{white-space:pre-wrap}}</style></head><body>
-<h1>Outlook Jev 清理</h1><p>僅在這台電腦上運作。保留與待確認郵件留在 Inbox；移動只會到可復原的「刪除的郵件」。</p>
-<p><small>首次使用請先在終端執行 <code>.venv/bin/python jev_outlook_cleaner.py login</code> 完成 Microsoft 登入。</small></p>
-<section class="panel"><h2>掃描 Inbox</h2><label>超過 <input id="days" type="number" min="1" max="3650" value="30"> 天</label>
-<label>最多 <input id="limit" type="number" min="1" max="200" value="200"> 封</label>
-<button id="scan">開始掃描與分類</button><p><small>掃描會略過保留清單和已處理郵件。分類失敗即停止。</small></p></section>
-<section class="panel"><h2>執行狀態</h2><p id="status">讀取中…</p><button onclick="location.reload()">更新預覽清單</button></section>
-<h2>最近預覽</h2>{''.join(cards) or '<p>尚無預覽。</p>'}
-<script>
+<style>{BASE_CSS}{DASHBOARD_CSS}</style></head><body><div class="wrap">
+<div class="top"><div><h1>Outlook Jev 清理</h1>
+<p class="sub">保留與待確認郵件留在 Inbox；移動只會到可復原的「刪除的郵件」。</p></div>
+<span class="badge-local">僅限本機 127.0.0.1</span></div>
+<div class="steps">
+<section class="panel"><h2><span class="step-no">1</span>登入</h2>
+<p class="small">首次使用請先在終端執行：</p><p style="margin-top:8px"><code>.venv/bin/python jev_outlook_cleaner.py login</code></p></section>
+<section class="panel"><h2><span class="step-no">2</span>掃描 Inbox</h2>
+<div class="fields"><label>超過幾天<input id="days" type="number" min="1" max="3650" value="30"></label>
+<label>最多幾封<input id="limit" type="number" min="1" max="200" value="200"></label>
+<button id="scan">開始掃描與分類</button></div>
+<p class="small">會略過保留清單與已處理郵件；分類失敗即整批停止。</p></section></div>
+<section class="panel" aria-live="polite"><div id="status-box"><span class="dot" id="dot"></span>
+<div><strong id="status-label">讀取中…</strong><div id="status-detail"></div></div>
+<button class="ghost" style="margin-left:auto" onclick="location.reload()">更新清單</button></div></section>
+<h2>最近預覽</h2>{''.join(cards) or empty}
+</div><script>
 const token = {json.dumps(CSRF)};
 async function post(path, value) {{
   const response = await fetch(path, {{method:'POST',headers:{{'Content-Type':'application/json','X-CSRF-Token':token}},body:JSON.stringify(value)}});
-  if (!response.ok) throw new Error('操作未啟動（HTTP ' + response.status + '）');
+  if (!response.ok) throw new Error(response.status === 409 ? '已有作業進行中，請稍候' : '操作未啟動（HTTP ' + response.status + '）');
   await refresh();
 }}
+const names = {{scan:'掃描',"auto-apply":'自動套用',"apply-selection":'套用選擇檔'}};
+const keys = {{total:'共',keep:'保留',review:'待確認',delete_candidate:'刪除候選',selected:'符合',moved:'已移動',skipped:'跳過',failed:'失敗',kept:'保留'}};
 async function refresh() {{
   try {{
     const value = await (await fetch('/api/status',{{cache:'no-store'}})).json();
-    const labels = {{idle:'待命',running:'執行中',done:'已完成',failed:'失敗，已停止。請查看本機終端紀錄。'}};
-    document.getElementById('status').textContent = (labels[value.state] || value.state) + '\\n' +
-      Object.entries(value).filter(([key])=>!['state','operation'].includes(key)).map(([key,val])=>key+': '+val).join(' · ');
-    if (value.state==='running') setTimeout(refresh, 1500);
-  }} catch {{ document.getElementById('status').textContent='無法讀取執行狀態'; }}
+    const labels = {{idle:'待命',running:'執行中…',done:'已完成',failed:'失敗，已停止；請查看本機終端或 reviews 內的紀錄'}};
+    const op = names[value.operation] ? names[value.operation] + '：' : '';
+    document.getElementById('dot').className = 'dot ' + value.state;
+    document.getElementById('status-label').textContent = op + (labels[value.state] || value.state);
+    document.getElementById('status-detail').textContent = Object.entries(value)
+      .filter(([key]) => !['state','operation','review_file'].includes(key))
+      .map(([key,val]) => (keys[key] || key) + ' ' + val).join(' · ');
+    document.getElementById('scan').disabled = value.state === 'running';
+    if (value.state === 'running') setTimeout(refresh, 1500);
+    else if (value.state === 'done' && !sessionStorage.getItem('reloaded-' + value.operation + JSON.stringify(value))) {{
+      sessionStorage.setItem('reloaded-' + value.operation + JSON.stringify(value), '1'); location.reload();
+    }}
+  }} catch {{ document.getElementById('status-label').textContent='無法讀取執行狀態'; }}
 }}
 document.getElementById('scan').onclick=async()=>{{
   try {{await post('/api/scan',{{days:Number(document.getElementById('days').value),limit:Number(document.getElementById('limit').value)}})}}
@@ -175,7 +198,7 @@ for(const button of document.querySelectorAll('[data-auto]')) button.onclick=asy
 }};
 for(const input of document.querySelectorAll('[data-selection]')) input.onchange=async()=>{{
   if(!input.files.length) return;
-  if(!confirm('依選擇檔保留勾選郵件，將未勾選郵件移至「刪除的郵件」？')) return;
+  if(!confirm('依選擇檔保留勾選郵件，將未勾選郵件移至「刪除的郵件」？')) {{ input.value=''; return; }}
   try{{await post('/api/apply-selection',{{review:input.dataset.selection,selection:JSON.parse(await input.files[0].text())}})}}
   catch(e){{alert(e.message)}}
 }};
