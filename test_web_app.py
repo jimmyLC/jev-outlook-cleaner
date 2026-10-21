@@ -58,8 +58,8 @@ class WebTests(unittest.TestCase):
         class FakeProc:
             returncode = 0
             stdout = iter([
-                "To sign in, use a web browser to open the page https://www.microsoft.com/link "
-                "and enter the code ABCD1234 to authenticate.\n",
+                'JEV_DEVICE_LOGIN {"url": "https://microsoft.com/devicelogin", "code": "ABCD1234"}\n',
+                "若要登入，請開啟頁面並輸入代碼 ABCD1234\n",
                 "Outlook 登入完成。\n",
             ])
             def wait(self):
@@ -79,11 +79,13 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("JEV_NONINTERACTIVE", popen.call_args.kwargs["env"])
         self.assertEqual(jobs.snapshot(), {"state": "done", "operation": "login"})
 
-    def test_device_prompt_rejects_foreign_hosts(self):
-        bad = "open the page https://evil.example/link and enter the code ABCD1234"
-        self.assertIsNone(web_app.DEVICE_PROMPT.search(bad))
-        good = "open the page https://login.microsoftonline.com/common/oauth2/deviceauth and enter the code ABCD1234"
-        self.assertEqual(web_app.DEVICE_PROMPT.search(good).group(2), "ABCD1234")
+    def test_device_login_line_rejects_foreign_hosts_and_bad_codes(self):
+        line = lambda url, code: "JEV_DEVICE_LOGIN " + json.dumps({"url": url, "code": code})
+        self.assertIsNone(web_app.parse_device_login(line("https://evil.example/link", "ABCD1234")))
+        self.assertIsNone(web_app.parse_device_login(line("https://microsoft.com/devicelogin", "<b>x</b>")))
+        self.assertIsNone(web_app.parse_device_login("JEV_DEVICE_LOGIN not-json"))
+        self.assertEqual(web_app.parse_device_login(line("https://microsoft.com/devicelogin", "ABCD1234")),
+                         ("https://microsoft.com/devicelogin", "ABCD1234"))
 
     def test_login_is_refused_while_another_job_runs(self):
         jobs = web_app.Jobs()

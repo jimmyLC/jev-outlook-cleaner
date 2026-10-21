@@ -66,6 +66,8 @@ def access_token() -> str:
         flow = app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(f"Could not start Microsoft sign-in: {flow.get('error_description', flow)}")
+        # Machine-readable line for the local Web UI; Microsoft's own message may be localized.
+        print("JEV_DEVICE_LOGIN " + json.dumps({"url": flow.get("verification_uri"), "code": flow["user_code"]}))
         print(flow["message"])
         result = app.acquire_token_by_device_flow(flow)
     if "access_token" not in result:
