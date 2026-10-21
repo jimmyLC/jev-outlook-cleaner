@@ -5,7 +5,7 @@ Updated: 2026-10-21 (Asia/Singapore). Public repository: `https://github.com/jim
 ## Delivered
 
 - A CLI cleaner (`jev_outlook_cleaner.py`) with configuration check, terminal Microsoft login, Inbox scan, three-way review, manual selection, and conservative auto-apply.
-- A loopback-only Web interface (`web_app.py`) for scan jobs, preview navigation, auto-apply, and confirmed selection upload. Browser writes use Host, Origin, and CSRF checks; jobs call the existing CLI. Interactive device login is deliberately performed in a terminal.
+- A loopback-only Web interface (`web_app.py`) for scan jobs, preview navigation, auto-apply, and confirmed selection upload. Browser writes use Host, Origin, and CSRF checks; jobs call the existing CLI. Microsoft device-code login is started only by an explicit dashboard button (it wraps the CLI `login`); scan and apply jobs never start it.
 - Empty example rule files, `.gitignore`, MIT license, setup documentation, and security guidance.
 
 ## Verification at handoff

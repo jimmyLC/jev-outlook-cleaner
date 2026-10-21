@@ -38,7 +38,7 @@ Check local configuration without displaying its values or connecting:
 .venv/bin/python jev_outlook_cleaner.py login
 ```
 
-Run `login` in a terminal before using the Web interface, and again if Microsoft requires a fresh interactive sign-in. The login command shows a device code in the terminal and confirms the Outlook profile without scanning mail or sending anything to Jev. The Web worker does not display a device code or wait indefinitely for interactive sign-in.
+Click **登入 Outlook** on the dashboard (step 1). It runs the same `login` command in the background and shows the Microsoft device-code page link and code in the browser; the scan buttons need a completed sign-in. You can still run `jev_outlook_cleaner.py login` in a terminal. Scan and apply jobs never start an interactive sign-in themselves; if Microsoft needs one, they stop and the dashboard asks you to log in.
 
 ## Web interface
 

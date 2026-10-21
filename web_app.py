@@ -29,6 +29,11 @@ REVIEWS = PROJECT / "reviews"
 REVIEW_NAME = re.compile(r"review-\d{8}-\d{6}-\d+\.json\Z")
 HTML_NAME = re.compile(r"review-\d{8}-\d{6}-\d+\.html\Z")
 MAX_REQUEST = 100_000
+LOGIN_TIMEOUT = 16 * 60  # Microsoft device codes expire after about 15 minutes
+DEVICE_PROMPT = re.compile(
+    r"open the page (https://(?:www\.)?(?:microsoft\.com|login\.microsoftonline\.com)/[\w/.-]+)"
+    r" and enter the code ([A-Z0-9]{6,12})"
+)
 
 
 def review_path(name: str) -> Path:
@@ -100,6 +105,8 @@ class Jobs:
                 if match:
                     summary = dict(zip(("kept", "moved", "skipped", "failed"),
                                        map(int, match.groups())))
+            if result.returncode != 0 and "需要互動登入" in "\n".join(lines):
+                summary = {"reason": "need_login"}
             with self.lock:
                 self.status = {"state": "done" if result.returncode == 0 else "failed",
                                "operation": command, **summary}
@@ -107,6 +114,44 @@ class Jobs:
             with self.lock:
                 self.status = {"state": "failed", "operation": command}
         finally:
+            with self.lock:
+                self.active = False
+
+    def start_login(self) -> bool:
+        """Run the CLI `login` command and surface its Microsoft device code."""
+        with self.lock:
+            if self.active:
+                return False
+            self.active = True
+            self.status = {"state": "running", "operation": "login"}
+        threading.Thread(target=self._run_login, daemon=True).start()
+        return True
+
+    def _run_login(self) -> None:
+        timer = None
+        try:
+            env = {key: value for key, value in os.environ.items() if key != "JEV_NONINTERACTIVE"}
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(PROJECT / "jev_outlook_cleaner.py"), "login"],
+                cwd=PROJECT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+            )
+            timer = threading.Timer(LOGIN_TIMEOUT, proc.kill)
+            timer.start()
+            for line in proc.stdout:
+                match = DEVICE_PROMPT.search(line)
+                if match:
+                    with self.lock:
+                        self.status = {"state": "running", "operation": "login",
+                                       "login_url": match.group(1), "login_code": match.group(2)}
+            proc.wait()
+            with self.lock:
+                self.status = {"state": "done" if proc.returncode == 0 else "failed", "operation": "login"}
+        except Exception:
+            with self.lock:
+                self.status = {"state": "failed", "operation": "login"}
+        finally:
+            if timer:
+                timer.cancel()
             with self.lock:
                 self.active = False
 
@@ -151,8 +196,12 @@ def dashboard() -> str:
 <p class="sub">保留與待確認郵件留在 Inbox；移動只會到可復原的「刪除的郵件」。</p></div>
 <span class="badge-local">僅限本機 127.0.0.1</span></div>
 <div class="steps">
-<section class="panel"><h2><span class="step-no">1</span>登入</h2>
-<p class="small">首次使用請先在終端執行：</p><p style="margin-top:8px"><code>.venv/bin/python jev_outlook_cleaner.py login</code></p></section>
+<section class="panel"><h2><span class="step-no">1</span>登入 Microsoft</h2>
+<div id="login-idle"><p class="small">首次使用或登入過期時，按下按鈕取得登入代碼。登入只讀取你的帳號資料，不會掃描或移動郵件。</p>
+<p style="margin-top:12px"><button id="login">登入 Outlook</button></p></div>
+<div id="login-wait" hidden><p>① <a id="login-link" target="_blank" rel="noopener noreferrer">開啟 Microsoft 登入頁面</a></p>
+<p style="margin-top:6px">② 輸入這組代碼：</p><div id="login-code" class="code"></div>
+<p class="small">完成後此處會自動更新；代碼約 15 分鐘內有效。</p></div></section>
 <section class="panel"><h2><span class="step-no">2</span>掃描 Inbox</h2>
 <div class="fields"><label>超過幾天<input id="days" type="number" min="1" max="3650" value="30"></label>
 <label>最多幾封<input id="limit" type="number" min="1" max="200" value="200"></label>
@@ -169,25 +218,36 @@ async function post(path, value) {{
   if (!response.ok) throw new Error(response.status === 409 ? '已有作業進行中，請稍候' : '操作未啟動（HTTP ' + response.status + '）');
   await refresh();
 }}
-const names = {{scan:'掃描',"auto-apply":'自動套用',"apply-selection":'套用選擇檔'}};
+const names = {{login:'登入',scan:'掃描',"auto-apply":'自動套用',"apply-selection":'套用選擇檔'}};
 const keys = {{total:'共',keep:'保留',review:'待確認',delete_candidate:'刪除候選',selected:'符合',moved:'已移動',skipped:'跳過',failed:'失敗',kept:'保留'}};
 async function refresh() {{
   try {{
     const value = await (await fetch('/api/status',{{cache:'no-store'}})).json();
-    const labels = {{idle:'待命',running:'執行中…',done:'已完成',failed:'失敗，已停止；請查看本機終端或 reviews 內的紀錄'}};
+    const labels = {{idle:'待命',running:'執行中…',done:'已完成',failed:'失敗，已停止；請查看 reviews 內的紀錄'}};
     const op = names[value.operation] ? names[value.operation] + '：' : '';
+    const waiting = value.operation === 'login' && value.state === 'running';
+    document.getElementById('login-idle').hidden = waiting && !!value.login_code;
+    document.getElementById('login-wait').hidden = !(waiting && value.login_code);
+    if (waiting && value.login_code && value.login_url.startsWith('https://')) {{
+      document.getElementById('login-link').href = value.login_url;
+      document.getElementById('login-code').textContent = value.login_code;
+    }}
+    document.getElementById('login').disabled = value.state === 'running';
     document.getElementById('dot').className = 'dot ' + value.state;
-    document.getElementById('status-label').textContent = op + (labels[value.state] || value.state);
+    document.getElementById('status-label').textContent = op + (value.reason === 'need_login' ? '需要先登入 Microsoft，請按左側「登入 Outlook」' : (labels[value.state] || value.state));
     document.getElementById('status-detail').textContent = Object.entries(value)
-      .filter(([key]) => !['state','operation','review_file'].includes(key))
+      .filter(([key]) => !['state','operation','review_file','reason','login_url','login_code'].includes(key))
       .map(([key,val]) => (keys[key] || key) + ' ' + val).join(' · ');
     document.getElementById('scan').disabled = value.state === 'running';
     if (value.state === 'running') setTimeout(refresh, 1500);
-    else if (value.state === 'done' && !sessionStorage.getItem('reloaded-' + value.operation + JSON.stringify(value))) {{
+    else if (value.state === 'done' && value.operation !== 'login' && !sessionStorage.getItem('reloaded-' + value.operation + JSON.stringify(value))) {{
       sessionStorage.setItem('reloaded-' + value.operation + JSON.stringify(value), '1'); location.reload();
     }}
   }} catch {{ document.getElementById('status-label').textContent='無法讀取執行狀態'; }}
 }}
+document.getElementById('login').onclick=async()=>{{
+  try {{await post('/api/login',{{}})}} catch(e){{alert(e.message)}}
+}};
 document.getElementById('scan').onclick=async()=>{{
   try {{await post('/api/scan',{{days:Number(document.getElementById('days').value),limit:Number(document.getElementById('limit').value)}})}}
   catch(e){{alert(e.message)}}
@@ -272,6 +332,8 @@ class Handler(BaseHTTPRequestHandler):
                 if type(days) is not int or type(limit) is not int or not 1 <= days <= 3650 or not 1 <= limit <= 200:
                     raise ValueError("Invalid scan limits")
                 started = JOBS.start("scan", ["scan", "--older-than-days", str(days), "--limit", str(limit)])
+            elif path == "/api/login":
+                started = JOBS.start_login()
             elif path == "/api/auto-apply":
                 path_to_review = review_path(payload.get("review", ""))
                 started = JOBS.start("auto-apply", ["auto-apply", str(path_to_review)])

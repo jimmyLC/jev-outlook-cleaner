@@ -69,6 +69,7 @@ color:var(--accent);font-weight:700;font-size:13px;margin-right:8px}
 .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .file-btn{position:relative;overflow:hidden}
 .file-btn input{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0}
+.code{font:700 30px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.15em;margin:8px 0;padding:12px 16px;background:var(--accent-soft);color:var(--accent);border-radius:10px;text-align:center;user-select:all}
 .empty-state{text-align:center;padding:36px 16px;color:var(--muted)}
 """
 

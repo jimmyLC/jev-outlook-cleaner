@@ -54,6 +54,42 @@ class WebTests(unittest.TestCase):
             self.assertEqual(reply.call_args.args[0], 202)
             start.assert_called_once_with("scan", ["scan", "--older-than-days", "30", "--limit", "2"])
 
+    def test_login_job_exposes_only_validated_device_code(self):
+        class FakeProc:
+            returncode = 0
+            stdout = iter([
+                "To sign in, use a web browser to open the page https://www.microsoft.com/link "
+                "and enter the code ABCD1234 to authenticate.\n",
+                "Outlook 登入完成。\n",
+            ])
+            def wait(self):
+                return 0
+            def kill(self):
+                pass
+        jobs = web_app.Jobs()
+        seen = []
+        with patch.object(web_app.subprocess, "Popen", return_value=FakeProc()) as popen:
+            self.assertTrue(jobs.start_login())
+            for _ in range(100):
+                if not jobs.active:
+                    break
+                import time; time.sleep(0.01)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-1], "login")
+        self.assertNotIn("JEV_NONINTERACTIVE", popen.call_args.kwargs["env"])
+        self.assertEqual(jobs.snapshot(), {"state": "done", "operation": "login"})
+
+    def test_device_prompt_rejects_foreign_hosts(self):
+        bad = "open the page https://evil.example/link and enter the code ABCD1234"
+        self.assertIsNone(web_app.DEVICE_PROMPT.search(bad))
+        good = "open the page https://login.microsoftonline.com/common/oauth2/deviceauth and enter the code ABCD1234"
+        self.assertEqual(web_app.DEVICE_PROMPT.search(good).group(2), "ABCD1234")
+
+    def test_login_is_refused_while_another_job_runs(self):
+        jobs = web_app.Jobs()
+        jobs.active = True
+        self.assertFalse(jobs.start_login())
+
 
 if __name__ == "__main__":
     unittest.main()
