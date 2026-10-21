@@ -84,6 +84,11 @@ class WebTests(unittest.TestCase):
         self.assertIsNone(web_app.parse_device_login(line("https://evil.example/link", "ABCD1234")))
         self.assertIsNone(web_app.parse_device_login(line("https://microsoft.com/devicelogin", "<b>x</b>")))
         self.assertIsNone(web_app.parse_device_login("JEV_DEVICE_LOGIN not-json"))
+        for url in ("https://login.microsoft.com.evil.example/device", "https://evilmicrosoft.com/device",
+                    "http://login.microsoft.com/device"):
+            self.assertIsNone(web_app.parse_device_login(line(url, "ABCD1234")), url)
+        self.assertEqual(web_app.parse_device_login(line("https://login.microsoft.com/device", "ABCD1234")),
+                         ("https://login.microsoft.com/device", "ABCD1234"))
         self.assertEqual(web_app.parse_device_login(line("https://microsoft.com/devicelogin", "ABCD1234")),
                          ("https://microsoft.com/devicelogin", "ABCD1234"))
 

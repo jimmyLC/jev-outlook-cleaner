@@ -31,7 +31,7 @@ HTML_NAME = re.compile(r"review-\d{8}-\d{6}-\d+\.html\Z")
 MAX_REQUEST = 100_000
 LOGIN_TIMEOUT = 16 * 60  # Microsoft device codes expire after about 15 minutes
 DEVICE_PREFIX = "JEV_DEVICE_LOGIN "
-DEVICE_URL = re.compile(r"https://(?:www\.)?(?:microsoft\.com|login\.microsoftonline\.com)/[\w/.-]+\Z")
+DEVICE_URL = re.compile(r"https://(?:[a-z0-9-]+\.)*(?:microsoft\.com|microsoftonline\.com)/[\w/.-]+\Z")
 DEVICE_CODE = re.compile(r"[A-Z0-9]{6,12}\Z")
 
 
