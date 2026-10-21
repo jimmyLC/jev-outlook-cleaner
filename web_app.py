@@ -214,7 +214,7 @@ def dashboard() -> str:
 <p style="margin-top:12px"><button id="login">登入 Outlook</button></p></div>
 <div id="login-wait" hidden><p>① <a id="login-link" target="_blank" rel="noopener noreferrer">開啟 Microsoft 登入頁面</a></p>
 <p style="margin-top:6px">② 輸入這組代碼：</p><div id="login-code" class="code"></div>
-<p class="small">完成後此處會自動更新；代碼約 15 分鐘內有效。</p></div></section>
+<p class="small">完成後此處會自動更新；代碼約 15 分鐘內有效。若頁面顯示「not the right page」，請關掉該分頁，重新按上方「登入 Outlook」取得新代碼，再開連結。</p></div></section>
 <section class="panel"><h2><span class="step-no">2</span>掃描 Inbox</h2>
 <div class="fields"><label>超過幾天<input id="days" type="number" min="1" max="3650" value="30"></label>
 <label>最多幾封<input id="limit" type="number" min="1" max="200" value="200"></label>
@@ -242,7 +242,7 @@ async function refresh() {{
     document.getElementById('login-idle').hidden = waiting && !!value.login_code;
     document.getElementById('login-wait').hidden = !(waiting && value.login_code);
     if (waiting && value.login_code && value.login_url.startsWith('https://')) {{
-      document.getElementById('login-link').href = value.login_url;
+      document.getElementById('login-link').href = 'https://microsoft.com/devicelogin';
       document.getElementById('login-code').textContent = value.login_code;
     }}
     document.getElementById('login').disabled = value.state === 'running';
