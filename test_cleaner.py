@@ -1,6 +1,7 @@
 """Offline checks: no Outlook or Jev network calls are made."""
 import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +27,19 @@ def review(msg):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_web_worker_never_starts_hidden_device_sign_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Mock()
+            app.get_accounts.return_value = []
+            with patch.object(cleaner, "ROOT", Path(folder)), \
+                    patch.object(cleaner, "CACHE_PATH", Path(folder) / "missing-cache"), \
+                    patch.object(cleaner, "graph_client_id", return_value="example-client"), \
+                    patch.object(cleaner.msal, "PublicClientApplication", return_value=app), \
+                    patch.dict(os.environ, {"JEV_NONINTERACTIVE": "1"}):
+                with self.assertRaisesRegex(RuntimeError, "login"):
+                    cleaner.access_token()
+            app.initiate_device_flow.assert_not_called()
+
     def test_protected_messages_never_call_jev(self):
         for change in ({"hasAttachments": True}, {"importance": "high"}, {"flag": {"flagStatus": "flagged"}}):
             msg = message() | change

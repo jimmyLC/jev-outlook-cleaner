@@ -74,6 +74,7 @@ class Jobs:
                 result = subprocess.run(
                     [sys.executable, str(PROJECT / "jev_outlook_cleaner.py"), *argv],
                     cwd=PROJECT, stdout=log, stderr=subprocess.STDOUT, check=False,
+                    env={**os.environ, "JEV_NONINTERACTIVE": "1"},
                 )
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
             summary: dict[str, object] = {}
@@ -142,6 +143,7 @@ button,input{{font:inherit}}button{{background:#1769aa;color:white;border:0;bord
 button[data-auto]{{background:#9d2c23}}input[type=number]{{width:90px;padding:8px}}label{{margin-right:12px}}
 small{{color:#526071}}#status{{white-space:pre-wrap}}</style></head><body>
 <h1>Outlook Jev 清理</h1><p>僅在這台電腦上運作。保留與待確認郵件留在 Inbox；移動只會到可復原的「刪除的郵件」。</p>
+<p><small>首次使用請先在終端執行 <code>.venv/bin/python jev_outlook_cleaner.py login</code> 完成 Microsoft 登入。</small></p>
 <section class="panel"><h2>掃描 Inbox</h2><label>超過 <input id="days" type="number" min="1" max="3650" value="30"> 天</label>
 <label>最多 <input id="limit" type="number" min="1" max="200" value="200"> 封</label>
 <button id="scan">開始掃描與分類</button><p><small>掃描會略過保留清單和已處理郵件。分類失敗即停止。</small></p></section>

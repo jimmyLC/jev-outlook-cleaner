@@ -56,6 +56,8 @@ def access_token() -> str:
     accounts = app.get_accounts()
     result = app.acquire_token_silent(SCOPES, account=accounts[0]) if accounts else None
     if not result:
+        if os.environ.get("JEV_NONINTERACTIVE") == "1":
+            raise RuntimeError("Outlook 需要互動登入；請先在終端執行 jev_outlook_cleaner.py login。")
         flow = app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(f"Could not start Microsoft sign-in: {flow.get('error_description', flow)}")
@@ -820,10 +822,19 @@ def check_config(args: argparse.Namespace) -> int:
     return 1 if missing else 0
 
 
+def login_account(args: argparse.Namespace) -> int:
+    account = Outlook(access_token()).profile()
+    if not account.get("id"):
+        raise RuntimeError("Outlook 帳戶驗證失敗。")
+    print("Outlook 登入完成。")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cautious Jev-powered Outlook Inbox cleanup")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check", help="Check local API settings without connecting").set_defaults(func=check_config)
+    commands.add_parser("login", help="Complete Outlook device sign-in in the terminal").set_defaults(func=login_account)
     scan_parser = commands.add_parser("scan", help="Classify old Inbox messages and save a review file")
     scan_parser.add_argument("--older-than-days", type=int, default=30)
     scan_parser.add_argument("--limit", type=int, default=250)

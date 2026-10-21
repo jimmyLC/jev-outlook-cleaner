@@ -26,13 +26,16 @@ cp delete-rules.example.json delete-rules.json
 chmod 600 .env keep-list.json delete-rules.json
 ```
 
-Edit `.env` locally to set `TYPESAFE_API_KEY` and `OUTLOOK_CLIENT_ID`. Never commit or paste the values. A system environment variable takes priority over `.env`. On first use, complete the Microsoft device sign-in shown in your terminal. The MSAL token cache is stored under `~/.jev-outlook-cleaner/` with owner-only permissions.
+Edit `.env` locally to set `TYPESAFE_API_KEY` and `OUTLOOK_CLIENT_ID`. Never commit or paste the values. A system environment variable takes priority over `.env`. The MSAL token cache is stored under `~/.jev-outlook-cleaner/` with owner-only permissions.
 
 Check local configuration without displaying its values or connecting:
 
 ```sh
 .venv/bin/python jev_outlook_cleaner.py check
+.venv/bin/python jev_outlook_cleaner.py login
 ```
+
+Run `login` in a terminal before using the Web interface, and again if Microsoft requires a fresh interactive sign-in. The login command shows a device code in the terminal and confirms the Outlook profile without scanning mail or sending anything to Jev. The Web worker does not display a device code or wait indefinitely for interactive sign-in.
 
 ## Web interface
 
