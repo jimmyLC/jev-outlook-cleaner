@@ -10,8 +10,8 @@ Updated: 2026-10-21 (Asia/Singapore). Public repository: `https://github.com/jim
 
 ## Verification at handoff
 
-- Last tested source commit before these handoff documents: `0c54ef05881b008651c31157da9c6cbcc7f478ff`.
-- Python compilation and 23 offline tests passed in both source and private runtime copies. The local Web dashboard returned HTTP 200 and rendered in a browser on `127.0.0.1`; no scan was triggered during that check.
+- Last tested source commit: see `git log`; the 2026-10-21 UI, local-signal and dashboard-login changes were added after `0c54ef0`.
+- Python compilation and 35 offline tests passed in both source and private runtime copies. Dashboard Microsoft device-code login was confirmed working by the owner on 2026-10-21; local signals (`mail_signals.py`) and Graph `internetMessageHeaders` evidence are not yet validated on real mail. The local Web dashboard returned HTTP 200 and rendered in a browser on `127.0.0.1`; no scan was triggered during that check.
 - The public file list was explicitly allowlisted. A local privacy scan found zero warnings and no match for live environment values or personal rule entries in tracked text. Repeat this check for every future publication.
 - The Web scan, manual selection upload, and auto-apply have **not** been validated end to end against a real mailbox. No cloud or public Web deployment was performed.
 
